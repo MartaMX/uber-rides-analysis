@@ -1,0 +1,10 @@
+streamlit==1.60.0
+pandas==3.0.3
+numpy==2.4.6
+plotly==6.9.0
+matplotlib==3.10.9
+seaborn==0.13.2
+scikit-learn==1.9.0
+scipy==1.18.0
+statsmodels==0.14.6
+
