@@ -24,3 +24,5 @@ env/
 
 # Large generated files
 *.log
+
+dashboard/.streamlit/secrets.toml

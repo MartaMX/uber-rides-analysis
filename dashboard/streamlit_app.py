@@ -7,6 +7,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+import json
+from google import genai
+
 # =========================================================
 # PAGE CONFIG
 # =========================================================
@@ -193,6 +196,19 @@ def cancellation_mask(df):
 
     return pd.Series(False, index=df.index)
 
+# =========================================================
+# CONSISTENT CHART COLORS
+# =========================================================
+VEHICLE_COLORS = {
+    "Auto": "#2F80ED",            # blue
+    "Bike": "#F2C94C",            # yellow
+    "Go Mini": "#27AE60",         # green
+    "Go Sedan": "#9B51E0",        # purple
+    "Mini": "#56CCF2",            # light blue
+    "Premier Sedan": "#F2994A",   # orange
+    "Uber XL": "#EB5757",         # red
+}
+
 
 # =========================================================
 # HEADER
@@ -283,6 +299,61 @@ with st.sidebar:
     st.header("Dashboard Filters")
 
     # =====================================================
+    # BOOKING STATUS
+    # =====================================================
+    # =====================================================
+    # BOOKING STATUS
+    # =====================================================
+    if status_col:
+    
+        st.subheader("Booking Status")
+    
+        status_options = (
+            df[status_col]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+    
+        # Show Completed and Incomplete first,
+        # then sort the remaining statuses alphabetically.
+        status_priority = {
+            "completed": 0,
+            "incomplete": 1,
+        }
+    
+        status_options = sorted(
+            status_options,
+            key=lambda status: (
+                status_priority.get(
+                    status.strip().lower(),
+                    2
+                ),
+                status
+            )
+        )
+    
+        selected_statuses = []
+    
+        for status in status_options:
+    
+            checked = st.checkbox(
+                status,
+                value=True,
+                key=f"status_{status}"
+            )
+    
+            if checked:
+                selected_statuses.append(status)
+    
+    else:
+        selected_statuses = None
+    
+    st.divider()
+
+
+    # =====================================================
     # TIME OF DAY
     # =====================================================
     st.subheader("Time of Day")
@@ -294,22 +365,18 @@ with st.sidebar:
         "Night": [22, 23, 0, 1, 2, 3, 4, 5],
     }
 
-    select_all_time = st.checkbox(
-        "All time periods",
-        value=True,
-        key="all_time"
-    )
+
 
     selected_periods = []
 
     for period in time_periods:
-
+    
         checked = st.checkbox(
             period,
-            value=select_all_time,
+            value=True,
             key=f"time_{period}"
         )
-
+    
         if checked:
             selected_periods.append(period)
 
@@ -320,8 +387,11 @@ with st.sidebar:
     # =====================================================
     # VEHICLE TYPE
     # =====================================================
+    # =====================================================
+    # VEHICLE TYPE
+    # =====================================================
     if vehicle_col:
-
+        
         st.subheader("Vehicle Type")
 
         vehicle_options = sorted(
@@ -331,25 +401,20 @@ with st.sidebar:
             .unique()
         )
 
-        select_all_vehicles = st.checkbox(
-            "All vehicle types",
-            value=True,
-            key="all_vehicles"
-        )
+
 
         selected_vehicles = []
 
         for vehicle in vehicle_options:
-
+        
             checked = st.checkbox(
                 vehicle,
-                value=select_all_vehicles,
+                value=True,
                 key=f"vehicle_{vehicle}"
             )
-
+        
             if checked:
-                selected_vehicles.append(vehicle)
-
+                selected_vehicles.append(vehicle)            
     else:
         selected_vehicles = None
 
@@ -357,42 +422,7 @@ with st.sidebar:
     st.divider()
 
 
-    # =====================================================
-    # BOOKING STATUS
-    # =====================================================
-    if status_col:
-
-        st.subheader("Booking Status")
-
-        status_options = sorted(
-            df[status_col]
-            .dropna()
-            .astype(str)
-            .unique()
-        )
-
-        select_all_statuses = st.checkbox(
-            "All booking statuses",
-            value=True,
-            key="all_status"
-        )
-
-        selected_statuses = []
-
-        for status in status_options:
-
-            checked = st.checkbox(
-                status,
-                value=select_all_statuses,
-                key=f"status_{status}"
-            )
-
-            if checked:
-                selected_statuses.append(status)
-
-    else:
-        selected_statuses = None
-
+    
     st.caption("All charts and KPIs update with these filters.")
 
 
@@ -546,25 +576,10 @@ with col1:
         # =================================================
         # DATA FOR HOURLY CHARTS
         # =================================================
-        # Start from full dataframe so the hour slider does
-        # not remove hours from the daily profile.
+
+        # Use the fully filtered dataset for the hourly charts.
         hourly_filtered = filtered.copy()
 
-        # Apply vehicle filter
-        if vehicle_col and selected_vehicles is not None:
-            hourly_filtered = hourly_filtered[
-                hourly_filtered[vehicle_col]
-                .astype(str)
-                .isin(selected_vehicles)
-            ]
-
-        # Apply booking status filter
-        if status_col and selected_statuses is not None:
-            hourly_filtered = hourly_filtered[
-                hourly_filtered[status_col]
-                .astype(str)
-                .isin(selected_statuses)
-            ]
 
 
         # =================================================
@@ -605,6 +620,7 @@ with col1:
                 x="hour",
                 y="bookings",
                 color="series",
+                color_discrete_map=VEHICLE_COLORS,
                 markers=True,
                 title="Booking Demand by Hour of Day",
                 labels={
@@ -697,6 +713,7 @@ with col1:
                 x="hour",
                 y="booking_value",
                 color="series",
+                color_discrete_map=VEHICLE_COLORS,
                 markers=True,
                 title=(
                     "Completed Booking Value "
@@ -759,6 +776,8 @@ with col1:
                 demand.sort_values("bookings"),
                 x="bookings",
                 y=vehicle_col,
+                color=vehicle_col,
+                color_discrete_map=VEHICLE_COLORS,
                 orientation="h",
                 title="Booking Demand by Vehicle Type",
                 labels={
@@ -767,6 +786,10 @@ with col1:
                 },
             )
 
+            fig.update_layout(
+                showlegend=False
+            )
+            
             st.plotly_chart(
                 style_chart(fig),
                 use_container_width=True
@@ -1360,30 +1383,69 @@ with col4:
 # AI-READY INSIGHT SECTION
 # =========================================================
 st.markdown("---")
-st.subheader("AI Insight")
+st.subheader(
+    "AI Business Interpretation"
+)
 
 summary = {
-    "bookings": total_bookings,
-    "completion_rate_pct": round(completion_rate, 1),
-    "cancellation_rate_pct": round(cancellation_rate, 1),
-    "avg_completed_booking_value": (
-        round(float(avg_booking_value), 2)
-        if pd.notna(avg_booking_value)
-        else None
-    ),
-    "avg_customer_rating": (
-        round(float(avg_customer_rating), 2)
-        if pd.notna(avg_customer_rating)
-        else None
-    ),
+    "filters": {
+        "booking_status": selected_statuses,
+        "time_of_day": selected_periods,
+        "vehicle_types": selected_vehicles,
+    },
+
+    "kpis": {
+        "bookings": total_bookings,
+        "completion_rate_pct": round(completion_rate, 1),
+        "cancellation_rate_pct": round(cancellation_rate, 1),
+
+        "avg_completed_booking_value_inr": (
+            round(float(avg_booking_value), 2)
+            if pd.notna(avg_booking_value)
+            else None
+        ),
+
+        "avg_customer_rating": (
+            round(float(avg_customer_rating), 2)
+            if pd.notna(avg_customer_rating)
+            else None
+        ),
+    },
 }
 
+# For vehicle demand
+#first version
+
+# improved version
 if vehicle_col and not filtered.empty:
-    summary["top_vehicle_type"] = (
-        filtered[vehicle_col].value_counts().index[0]
-        if filtered[vehicle_col].notna().any()
-        else None
+
+    vehicle_demand = (
+        filtered[vehicle_col]
+        .value_counts()
+        .rename_axis("vehicle_type")
+        .reset_index(name="bookings")
     )
+
+    summary["vehicle_demand"] = (
+        vehicle_demand
+        .to_dict(orient="records")
+    )
+    
+# For hourly demand
+if "hour" in filtered.columns:
+
+    hourly_demand_summary = (
+        filtered
+        .groupby("hour")
+        .size()
+        .reset_index(name="bookings")
+    )
+
+    summary["hourly_demand"] = (
+        hourly_demand_summary
+        .to_dict(orient="records")
+    )
+#
 
 if pickup_col and not filtered.empty:
     summary["top_pickup_location"] = (
@@ -1393,76 +1455,229 @@ if pickup_col and not filtered.empty:
     )
 
 if vtat_col:
-    completed_vtat = filtered.loc[completed, vtat_col].mean()
-    cancelled_vtat = filtered.loc[cancelled, vtat_col].mean()
 
-    summary["avg_vtat_completed"] = (
-        round(float(completed_vtat), 2)
-        if pd.notna(completed_vtat)
-        else None
-    )
-    summary["avg_vtat_cancelled"] = (
-        round(float(cancelled_vtat), 2)
-        if pd.notna(cancelled_vtat)
-        else None
+    completed_vtat = (
+        filtered.loc[completed, vtat_col]
+        .mean()
     )
 
+    cancelled_vtat = (
+        filtered.loc[cancelled, vtat_col]
+        .mean()
+    )
 
-def local_insight(s):
-    """Fallback narrative before connecting an external LLM API."""
-    statements = [
-        f"The current selection contains {s['bookings']:,} bookings.",
-        f"The completion rate is {s['completion_rate_pct']:.1f}% "
-        f"and the cancellation rate is {s['cancellation_rate_pct']:.1f}%.",
-    ]
+    summary["service_performance"] = {
+        "avg_vtat_completed": (
+            round(float(completed_vtat), 2)
+            if pd.notna(completed_vtat)
+            else None
+        ),
 
-    if s.get("top_vehicle_type"):
-        statements.append(
-            f"{s['top_vehicle_type']} has the highest booking volume "
-            f"within the selected filters."
+        "avg_vtat_cancelled": (
+            round(float(cancelled_vtat), 2)
+            if pd.notna(cancelled_vtat)
+            else None
+        ),
+    }
+
+def generate_ai_insight(summary):
+        
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not gemini_api_key:
+        try:
+            gemini_api_key = st.secrets["GEMINI_API_KEY"]
+        except FileNotFoundError:
+            gemini_api_key = None
+    
+    if not gemini_api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY was not found in environment variables "
+            "or Streamlit secrets."
+        )
+    
+    client = genai.Client(
+        api_key=gemini_api_key
+    )
+
+    prompt = f"""
+You are a business data analyst interpreting an Uber rides
+operations dashboard.
+
+The following data was calculated in Python from the currently
+selected dashboard filters.
+
+Do not recalculate the metrics.
+Do not invent values that are not provided.
+
+DATA:
+{json.dumps(summary, indent=2)}
+
+Write a concise business interpretation of the dashboard.
+
+Focus on:
+- the most important demand pattern
+- operational performance
+- completion and cancellation performance
+- meaningful differences between vehicle types, if supported
+- unusual hourly demand patterns, if visible in the supplied values
+
+Rules:
+- Use only the supplied data.
+- Do not claim causation where the data only shows an association.
+- Clearly distinguish observations from possible explanations.
+- Avoid generic statements.
+- Do not mention that you are an AI.
+- Keep the response concise and suitable for an executive dashboard.
+- End with one practical business recommendation.
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt,
+    )
+
+    return response.text
+
+# =========================================================
+# CURRENT FILTER SNAPSHOT
+# =========================================================
+current_filters = {
+    "booking_status": sorted(selected_statuses),
+    "time_of_day": sorted(selected_periods),
+    "vehicle_types": sorted(selected_vehicles),
+}
+
+
+# =========================================================
+# HUMAN-READABLE FILTER SUMMARY
+# =========================================================
+
+# Booking status
+if set(selected_statuses) == set(status_options):
+    status_text = "All booking statuses"
+else:
+    status_text = ", ".join(selected_statuses)
+
+
+# Time of day
+if set(selected_periods) == set(time_periods.keys()):
+    time_text = "All times of day"
+else:
+    time_text = ", ".join(selected_periods)
+
+
+# Vehicle type
+if set(selected_vehicles) == set(vehicle_options):
+    vehicle_text = "All vehicle types"
+else:
+    vehicle_text = ", ".join(selected_vehicles)
+
+
+filter_summary = (
+    f"**Based on:** "
+    f"{status_text} · "
+    f"{time_text} · "
+    f"{vehicle_text}"
+)
+
+
+# =========================================================
+# DETECT FILTER CHANGES
+# =========================================================
+
+# If an interpretation has already been generated and
+# the filters subsequently change, mark it as stale.
+if (
+    "ai_insight" in st.session_state
+    and "ai_filters" in st.session_state
+    and current_filters != st.session_state["ai_filters"]
+):
+    st.session_state["ai_is_stale"] = True
+
+
+# =========================================================
+# GENERATE AI INTERPRETATION
+# =========================================================
+if st.button(
+    "✨ Generate AI Interpretation",
+    type="primary"
+):
+
+    try:
+
+        with st.spinner(
+            "Interpreting the current dashboard..."
+        ):
+
+            insight = generate_ai_insight(
+                summary
+            )
+
+        # Save both the interpretation and
+        # the exact filters that produced it.
+        st.session_state["ai_insight"] = insight
+        st.session_state["ai_filters"] = current_filters
+
+        # A freshly generated interpretation
+        # is no longer stale.
+        st.session_state["ai_is_stale"] = False
+
+    except Exception as exc:
+
+        if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+    
+            st.warning(
+                "The AI service is temporarily busy. "
+                "Please try generating the interpretation again in a moment."
+            )
+    
+        else:
+    
+            st.error(
+                f"Could not generate AI interpretation: {exc}"
+            )
+        
+
+
+# =========================================================
+# DISPLAY AI INTERPRETATION
+# =========================================================
+
+# Only do anything if an interpretation
+# has actually been generated before.
+if "ai_insight" in st.session_state:
+
+    is_stale = st.session_state.get(
+        "ai_is_stale",
+        False
+    )
+
+    if is_stale:
+
+        st.info(
+            "Dashboard filters have changed. "
+            "Generate a new AI interpretation "
+            "for the current selection."
         )
 
-    completed_vtat = s.get("avg_vtat_completed")
-    cancelled_vtat = s.get("avg_vtat_cancelled")
+    else:
 
-    if completed_vtat is not None and cancelled_vtat is not None:
-        if cancelled_vtat > completed_vtat:
-            diff = cancelled_vtat - completed_vtat
-            statements.append(
-                f"Cancelled bookings have an average VTAT about "
-                f"{diff:.1f} units higher than completed bookings, "
-                f"which may indicate an association between longer "
-                f"vehicle arrival times and cancellation."
-            )
-        elif cancelled_vtat < completed_vtat:
-            diff = completed_vtat - cancelled_vtat
-            statements.append(
-                f"Cancelled bookings have an average VTAT about "
-                f"{diff:.1f} units lower than completed bookings "
-                f"in this filtered view."
+        st.markdown(filter_summary)
+
+        with st.container(border=True):
+            st.markdown(
+                st.session_state["ai_insight"]
             )
 
-    if s.get("top_pickup_location"):
-        statements.append(
-            f"{s['top_pickup_location']} is the most frequent pickup "
-            f"location in this selection."
-        )
 
-    return " ".join(statements)
-
-
-if st.button("✨ Generate Insight"):
-    insight = local_insight(summary)
-
-    st.markdown(
-        f'<div class="ai-box">{insight}</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.expander("Metrics passed to the future LLM API"):
-        st.json(summary)
+# Expander
+with st.expander(
+    "Data sent to the AI model"
+):
+    st.json(summary)
 
 st.caption(
-    "MVP version: the insight generator currently uses calculated metrics. "
-    "An LLM API can be connected later without changing the dashboard structure."
+    "Generated on demand from the metrics "
+    "in the current dashboard selection."
 )
