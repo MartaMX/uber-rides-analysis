@@ -91,6 +91,8 @@ st.markdown(
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
+DATASET_LOCATION = "Bengaluru, India"
+
 DEFAULT_CSV_PATHS = [
     BASE_DIR.parent / "data" / "clean_uber_rides.csv",  # recommended
     BASE_DIR / "clean_uber_rides.csv",                  # optional fallback
@@ -123,12 +125,13 @@ def load_data(csv_path: str) -> pd.DataFrame:
         "booking_value",
         "booking_value_inr",
         "booking_value_usd",
+        "realized_booking_value",
+        "potential_revenue_lost",
         "customer_rating",
-        "driver_rating",
+        "driver_ratings",
         "avg_vtat",
         "avg_ctat",
-        "trip_distance",
-        "trip_duration",
+        "ride_distance",
     ]
 
     for col in numeric_candidates:
@@ -231,19 +234,13 @@ st.markdown(
 # =========================================================
 default_csv = find_default_csv()
 
-with st.sidebar:
-    st.header("Dashboard Filters")
-
-    if not default_csv:
-        st.info(
-            "Place `clean_uber_rides.csv` in the same folder as this app, "
-            "or enter the path below."
-        )
-
-    csv_path = st.text_input(
-        "CSV file path",
-        value=default_csv or "clean_uber_rides.csv",
+if not default_csv:
+    st.error(
+        "Dashboard data file could not be found."
     )
+    st.stop()
+
+csv_path = default_csv
 
 
 try:
@@ -269,6 +266,31 @@ status_col = first_existing(
 pickup_col = first_existing(
     df,
     ["pickup_location", "Pickup Location"]
+)
+
+drop_col = first_existing(
+    df,
+    ["drop_location", "Drop Location"]
+)
+
+ride_distance_col = first_existing(
+    df,
+    ["ride_distance", "Ride Distance"]
+)
+
+payment_method_col = first_existing(
+    df,
+    ["payment_method", "Payment Method"]
+)
+
+incomplete_reason_col = first_existing(
+    df,
+    ["incomplete_rides_reason", "Incomplete Rides Reason"]
+)
+
+realized_value_col = first_existing(
+    df,
+    ["realized_booking_value"]
 )
 
 booking_value_col = first_existing(
@@ -297,6 +319,12 @@ ctat_col = first_existing(
 with st.sidebar:
 
     st.header("Dashboard Filters")
+    
+    st.caption("Dataset")
+    st.markdown(f"📍 **{DATASET_LOCATION}**")
+    st.caption(f"{len(df):,} ride bookings")
+
+    st.divider()
 
     # =====================================================
     # BOOKING STATUS
@@ -587,8 +615,6 @@ with col1:
         # =================================================
         if "hour" in hourly_filtered.columns and vehicle_col:
 
-            # Total bookings by hour
-
 
 
             # Bookings by hour and vehicle type
@@ -603,16 +629,7 @@ with col1:
                     }
                 )
             )
-
-
-            # Combine total + vehicle series
-            hourly_demand = pd.concat(
-                [
-                    
-                    hourly_vehicle
-                ],
-                ignore_index=True
-            )
+            hourly_demand = hourly_vehicle.copy()
 
 
             fig = px.line(
@@ -653,7 +670,7 @@ with col1:
                 "Hour or vehicle type column not found."
             )
 
-
+        
         # =================================================
         # 2. COMPLETED BOOKING VALUE BY HOUR
         # =================================================
@@ -751,6 +768,81 @@ with col1:
                 "value column not found."
             )
 
+
+# =========================================================
+# PRODUCT & VEHICLE ECONOMICS
+# =========================================================
+with col1:
+
+    with st.container(border=True):
+
+        st.subheader("Product & Vehicle Economics")
+
+        # -----------------------------------------
+        # Revenue by vehicle type
+        # -----------------------------------------
+        if vehicle_col and booking_value_col:
+
+            revenue_data = filtered.loc[
+                completion_mask(filtered)
+            ].dropna(
+                subset=[
+                    vehicle_col,
+                    booking_value_col
+                ]
+            )
+
+
+            revenue_by_vehicle = (
+                revenue_data
+                .groupby(
+                    vehicle_col,
+                    as_index=False
+                )[booking_value_col]
+                .sum()
+                .sort_values(
+                    booking_value_col,
+                    ascending=True
+                )
+            )
+            
+            fig = px.bar(
+                revenue_by_vehicle,
+                x=booking_value_col,
+                y=vehicle_col,
+                color=vehicle_col,
+                color_discrete_map=VEHICLE_COLORS,
+                orientation="h",
+                title="Completed Revenue by Vehicle Type",
+                labels={
+                    booking_value_col: "Completed Revenue (₹)",
+                    vehicle_col: ""
+                },
+                text_auto=".2s",
+            )
+            
+            fig.update_yaxes(
+                categoryorder="array",
+                categoryarray=revenue_by_vehicle[vehicle_col].tolist()
+            )
+            
+            fig.update_layout(
+                showlegend=False
+            )
+            
+            st.plotly_chart(
+                style_chart(fig),
+                use_container_width=True
+            )
+
+
+        else:
+            st.info(
+                "Vehicle or booking value "
+                "column not found."
+            )
+    
+    
 # =========================================================
 # DEMAND & VALUE
 # =========================================================
@@ -772,8 +864,13 @@ with col1:
                 .reset_index(name="bookings")
             )
 
+            demand = demand.sort_values(
+                "bookings",
+                ascending=True
+            )
+
             fig = px.bar(
-                demand.sort_values("bookings"),
+                demand,
                 x="bookings",
                 y=vehicle_col,
                 color=vehicle_col,
@@ -784,6 +881,17 @@ with col1:
                     "bookings": "Bookings",
                     vehicle_col: ""
                 },
+                text_auto=True,
+            )
+
+            fig.update_traces(
+                textposition="inside",
+                texttemplate="%{x:,.0f}"
+            )
+            
+            fig.update_yaxes(
+                categoryorder="array",
+                categoryarray=demand[vehicle_col].tolist()
             )
 
             fig.update_layout(
@@ -855,6 +963,65 @@ with col2:
 
         st.subheader("Service Performance")
 
+        # -----------------------------------------
+        # VTAT by vehicle type
+        # -----------------------------------------
+        if vtat_col and vehicle_col:
+        
+            vtat_by_vehicle = (
+                filtered
+                .dropna(
+                    subset=[
+                        vtat_col,
+                        vehicle_col
+                    ]
+                )
+                .groupby(
+                    vehicle_col,
+                    as_index=False
+                )[vtat_col]
+                .mean()
+                .sort_values(
+                    vtat_col,
+                    ascending=False
+                )
+            )
+        
+            fig = px.bar(
+                vtat_by_vehicle,
+                x=vtat_col,
+                y=vehicle_col,
+                color=vehicle_col,
+                color_discrete_map=VEHICLE_COLORS,
+                orientation="h",
+                title="Average VTAT by Vehicle Type",
+                labels={
+                    vtat_col:
+                        "Average VTAT",
+                    vehicle_col: ""
+                },
+                text_auto=".1f",
+            )
+
+            fig.update_layout(
+                showlegend=False
+            )
+
+            fig.update_traces(
+                textposition="inside",
+                texttemplate="%{x:.1f}"
+            )
+        
+            st.plotly_chart(
+                style_chart(fig),
+                use_container_width=True
+            )
+        
+        else:
+            st.info(
+                "VTAT or vehicle type "
+                "column not found."
+            )
         # -----------------------------------------
         # VTAT by booking outcome
         # -----------------------------------------
@@ -973,7 +1140,51 @@ with col3:
 
     with st.container(border=True):
 
-        st.subheader("Customer & Location")
+        st.subheader("Revenue & Geography")
+
+        if payment_method_col and booking_value_col:
+        
+            payment_data = filtered.loc[
+                completion_mask(filtered)
+            ].dropna(
+                subset=[
+                    payment_method_col,
+                    booking_value_col
+                ]
+            )
+        
+            revenue_by_payment = (
+                payment_data
+                .groupby(
+                    payment_method_col,
+                    as_index=False
+                )[booking_value_col]
+                .sum()
+                .sort_values(
+                    booking_value_col,
+                    ascending=False
+                )
+            )
+        
+            fig = px.bar(
+                revenue_by_payment,
+                x=payment_method_col,
+                y=booking_value_col,
+                title="Completed Revenue by Payment Method",
+                labels={
+                    payment_method_col:
+                        "Payment Method",
+                    booking_value_col:
+                        "Completed Revenue (₹)"
+                },
+                text_auto=".2s",
+            )
+        
+            st.plotly_chart(
+                style_chart(fig),
+                use_container_width=True
+            )
+
 
         # -----------------------------------------
         # Customer rating distribution
@@ -1370,7 +1581,8 @@ with col4:
                     fig,
                     height=380
                 ),
-                use_container_width=True
+                use_container_width=True,
+                key="top_cancellation_reasons_chart"
             )
 
         else:
@@ -1378,6 +1590,86 @@ with col4:
                 "Cancellation reason "
                 "columns not found."
             )
+
+# =========================================================
+# ROW 3 — ROUTE ANALYSIS
+# =========================================================
+st.markdown("---")
+
+with st.container(border=True):
+
+    st.subheader("Top Routes")
+
+    if pickup_col and drop_col:
+
+        route_data = (
+            filtered
+            .dropna(
+                subset=[
+                    pickup_col,
+                    drop_col
+                ]
+            )
+            .groupby(
+                [
+                    pickup_col,
+                    drop_col
+                ]
+            )
+            .size()
+            .reset_index(
+                name="bookings"
+            )
+        )
+
+        route_data["route"] = (
+            route_data[
+                pickup_col
+            ].astype(str)
+            + " → "
+            + route_data[
+                drop_col
+            ].astype(str)
+        )
+
+        top_routes = (
+            route_data
+            .nlargest(
+                15,
+                "bookings"
+            )
+            .sort_values(
+                "bookings"
+            )
+        )
+
+        fig = px.bar(
+            top_routes,
+            x="bookings",
+            y="route",
+            orientation="h",
+            title="Most Popular Pickup → Drop-off Routes",
+            labels={
+                "bookings":
+                    "Bookings",
+                "route": ""
+            },
+            text_auto=True,
+        )
+
+        st.plotly_chart(
+            style_chart(
+                fig,
+                height=520
+            ),
+            use_container_width=True
+        )
+
+    else:
+        st.info(
+            "Pickup or drop-off "
+            "location column not found."
+        )
 
 # =========================================================
 # AI-READY INSIGHT SECTION
@@ -1413,13 +1705,13 @@ summary = {
     },
 }
 
-# For vehicle demand
-#first version
 
-# improved version
+# =========================================================
+# VEHICLE DEMAND
+# =========================================================
 if vehicle_col and not filtered.empty:
 
-    vehicle_demand = (
+    vehicle_demand_summary = (
         filtered[vehicle_col]
         .value_counts()
         .rename_axis("vehicle_type")
@@ -1427,11 +1719,14 @@ if vehicle_col and not filtered.empty:
     )
 
     summary["vehicle_demand"] = (
-        vehicle_demand
+        vehicle_demand_summary
         .to_dict(orient="records")
     )
-    
-# For hourly demand
+
+
+# =========================================================
+# HOURLY DEMAND
+# =========================================================
 if "hour" in filtered.columns:
 
     hourly_demand_summary = (
@@ -1439,66 +1734,437 @@ if "hour" in filtered.columns:
         .groupby("hour")
         .size()
         .reset_index(name="bookings")
+        .sort_values("hour")
     )
 
     summary["hourly_demand"] = (
         hourly_demand_summary
         .to_dict(orient="records")
     )
-#
 
+
+# =========================================================
+# COMPLETED REVENUE BY VEHICLE TYPE
+# =========================================================
+if vehicle_col and booking_value_col:
+
+    vehicle_revenue_summary = (
+        filtered.loc[
+            completion_mask(filtered)
+        ]
+        .dropna(
+            subset=[
+                vehicle_col,
+                booking_value_col
+            ]
+        )
+        .groupby(
+            vehicle_col,
+            as_index=False
+        )[booking_value_col]
+        .sum()
+        .rename(
+            columns={
+                vehicle_col: "vehicle_type",
+                booking_value_col: "completed_revenue_inr"
+            }
+        )
+        .sort_values(
+            "completed_revenue_inr",
+            ascending=False
+        )
+    )
+
+    summary["vehicle_revenue"] = (
+        vehicle_revenue_summary
+        .to_dict(orient="records")
+    )
+
+
+# =========================================================
+# AVERAGE VTAT BY VEHICLE TYPE
+# =========================================================
+if vehicle_col and vtat_col:
+
+    vtat_vehicle_summary = (
+        filtered
+        .dropna(
+            subset=[
+                vehicle_col,
+                vtat_col
+            ]
+        )
+        .groupby(
+            vehicle_col,
+            as_index=False
+        )[vtat_col]
+        .mean()
+        .rename(
+            columns={
+                vehicle_col: "vehicle_type",
+                vtat_col: "avg_vtat"
+            }
+        )
+        .sort_values(
+            "avg_vtat",
+            ascending=True
+        )
+    )
+
+    vtat_vehicle_summary["avg_vtat"] = (
+        vtat_vehicle_summary["avg_vtat"]
+        .round(2)
+    )
+
+    summary["vtat_by_vehicle"] = (
+        vtat_vehicle_summary
+        .to_dict(orient="records")
+    )
+
+
+# =========================================================
+# COMPLETED REVENUE BY PAYMENT METHOD
+# =========================================================
+if payment_method_col and booking_value_col:
+
+    payment_revenue_summary = (
+        filtered.loc[
+            completion_mask(filtered)
+        ]
+        .dropna(
+            subset=[
+                payment_method_col,
+                booking_value_col
+            ]
+        )
+        .groupby(
+            payment_method_col,
+            as_index=False
+        )[booking_value_col]
+        .sum()
+        .rename(
+            columns={
+                payment_method_col: "payment_method",
+                booking_value_col: "completed_revenue_inr"
+            }
+        )
+        .sort_values(
+            "completed_revenue_inr",
+            ascending=False
+        )
+    )
+
+    summary["revenue_by_payment_method"] = (
+        payment_revenue_summary
+        .to_dict(orient="records")
+    )
+
+
+# =========================================================
+# CANCELLATION SOURCE
+# =========================================================
+customer_cancel_flag = first_existing(
+    filtered,
+    [
+        "cancelled_rides_by_customer",
+        "Cancelled Rides by Customer",
+    ],
+)
+
+driver_cancel_flag = first_existing(
+    filtered,
+    [
+        "cancelled_rides_by_driver",
+        "Cancelled Rides by Driver",
+    ],
+)
+
+cancellation_source_summary = []
+
+
+if customer_cancel_flag:
+
+    customer_cancel_count = (
+        filtered[
+            customer_cancel_flag
+        ]
+        .notna()
+        .sum()
+    )
+
+    cancellation_source_summary.append(
+        {
+            "source": "Customer",
+            "cancellations": int(
+                customer_cancel_count
+            ),
+        }
+    )
+
+
+if driver_cancel_flag:
+
+    driver_cancel_count = (
+        filtered[
+            driver_cancel_flag
+        ]
+        .notna()
+        .sum()
+    )
+
+    cancellation_source_summary.append(
+        {
+            "source": "Driver",
+            "cancellations": int(
+                driver_cancel_count
+            ),
+        }
+    )
+
+
+if cancellation_source_summary:
+
+    total_source_cancellations = sum(
+        item["cancellations"]
+        for item in cancellation_source_summary
+    )
+
+    for item in cancellation_source_summary:
+
+        item["share_pct"] = (
+            round(
+                item["cancellations"]
+                / total_source_cancellations
+                * 100,
+                1
+            )
+            if total_source_cancellations > 0
+            else 0
+        )
+
+    summary["cancellation_source"] = (
+        cancellation_source_summary
+    )
+
+
+# =========================================================
+# TOP CANCELLATION REASONS
+# =========================================================
+customer_reason_col = first_existing(
+    filtered,
+    [
+        "reason_for_cancelling_by_customer",
+        "customer_cancellation_reason",
+        "Reason for cancelling by Customer",
+    ],
+)
+
+driver_reason_col = first_existing(
+    filtered,
+    [
+        "driver_cancellation_reason",
+        "Driver Cancellation Reason",
+    ],
+)
+
+reason_frames = []
+
+
+if customer_reason_col:
+
+    customer_reasons_summary = (
+        filtered[
+            customer_reason_col
+        ]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+
+    customer_reasons_summary = (
+        customer_reasons_summary[
+            ~customer_reasons_summary
+            .str.lower()
+            .isin(
+                [
+                    "",
+                    "nan",
+                    "none"
+                ]
+            )
+        ]
+    )
+
+    if not customer_reasons_summary.empty:
+
+        temp = (
+            customer_reasons_summary
+            .value_counts()
+            .reset_index()
+        )
+
+        temp.columns = [
+            "reason",
+            "count"
+        ]
+
+        reason_frames.append(
+            temp
+        )
+
+
+if driver_reason_col:
+
+    driver_reasons_summary = (
+        filtered[
+            driver_reason_col
+        ]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+
+    driver_reasons_summary = (
+        driver_reasons_summary[
+            ~driver_reasons_summary
+            .str.lower()
+            .isin(
+                [
+                    "",
+                    "nan",
+                    "none"
+                ]
+            )
+        ]
+    )
+
+    if not driver_reasons_summary.empty:
+
+        temp = (
+            driver_reasons_summary
+            .value_counts()
+            .reset_index()
+        )
+
+        temp.columns = [
+            "reason",
+            "count"
+        ]
+
+        reason_frames.append(
+            temp
+        )
+
+
+if reason_frames:
+
+    cancellation_reasons_summary = (
+        pd.concat(
+            reason_frames,
+            ignore_index=True
+        )
+        .groupby(
+            "reason",
+            as_index=False
+        )["count"]
+        .sum()
+        .nlargest(
+            10,
+            "count"
+        )
+    )
+
+    summary["top_cancellation_reasons"] = (
+        cancellation_reasons_summary
+        .to_dict(orient="records")
+    )
+
+
+# =========================================================
+# TOP ROUTES
+# =========================================================
+if pickup_col and drop_col:
+
+    top_routes_summary = (
+        filtered
+        .dropna(
+            subset=[
+                pickup_col,
+                drop_col
+            ]
+        )
+        .groupby(
+            [
+                pickup_col,
+                drop_col
+            ]
+        )
+        .size()
+        .reset_index(
+            name="bookings"
+        )
+        .rename(
+            columns={
+                pickup_col: "pickup_location",
+                drop_col: "drop_location"
+            }
+        )
+        .sort_values(
+            "bookings",
+            ascending=False
+        )
+        .head(15)
+    )
+
+    summary["top_routes"] = (
+        top_routes_summary
+        .to_dict(orient="records")
+    )
+
+
+# =========================================================
+# TOP PICKUP LOCATION
+# =========================================================
 if pickup_col and not filtered.empty:
+
     summary["top_pickup_location"] = (
-        filtered[pickup_col].value_counts().index[0]
+        filtered[pickup_col]
+        .value_counts()
+        .index[0]
         if filtered[pickup_col].notna().any()
         else None
     )
 
-if vtat_col:
-
-    completed_vtat = (
-        filtered.loc[completed, vtat_col]
-        .mean()
-    )
-
-    cancelled_vtat = (
-        filtered.loc[cancelled, vtat_col]
-        .mean()
-    )
-
-    summary["service_performance"] = {
-        "avg_vtat_completed": (
-            round(float(completed_vtat), 2)
-            if pd.notna(completed_vtat)
-            else None
-        ),
-
-        "avg_vtat_cancelled": (
-            round(float(cancelled_vtat), 2)
-            if pd.notna(cancelled_vtat)
-            else None
-        ),
-    }
-
 def generate_ai_insight(summary):
-        
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    
+    gemini_api_key = os.getenv(
+        "GEMINI_API_KEY"
+    )
+
     if not gemini_api_key:
+
         try:
-            gemini_api_key = st.secrets["GEMINI_API_KEY"]
+            gemini_api_key = (
+                st.secrets[
+                    "GEMINI_API_KEY"
+                ]
+            )
+
         except FileNotFoundError:
             gemini_api_key = None
-    
+
+
     if not gemini_api_key:
+
         raise RuntimeError(
             "GEMINI_API_KEY was not found in environment variables "
             "or Streamlit secrets."
         )
-    
+
+
     client = genai.Client(
         api_key=gemini_api_key
     )
+
 
     prompt = f"""
 You are a business data analyst interpreting an Uber rides
@@ -1516,26 +2182,37 @@ DATA:
 Write a concise business interpretation of the dashboard.
 
 Focus on:
-- the most important demand pattern
-- operational performance
+- the most important overall demand pattern
+- peak hourly demand patterns
 - completion and cancellation performance
-- meaningful differences between vehicle types, if supported
-- unusual hourly demand patterns, if visible in the supplied values
+- differences in booking demand between vehicle types
+- differences in completed revenue between vehicle types
+- vehicle operational performance based on average VTAT
+- which payment methods contribute the most completed revenue
+- the main cancellation sources and cancellation reasons
+- meaningful patterns in the most popular pickup-to-drop-off routes
+- any notable differences or concentrations supported by the supplied values
 
 Rules:
 - Use only the supplied data.
 - Do not claim causation where the data only shows an association.
 - Clearly distinguish observations from possible explanations.
+- Prioritize the most decision-relevant findings rather than describing every value.
+- Compare vehicle types where differences are meaningful.
+- Highlight unusually high or low values when supported by the supplied data.
+- Do not infer surge pricing because surge-pricing data is not supplied.
 - Avoid generic statements.
 - Do not mention that you are an AI.
 - Keep the response concise and suitable for an executive dashboard.
 - End with one practical business recommendation.
 """
 
+
     response = client.models.generate_content(
         model="gemini-3.6-flash",
         contents=prompt,
     )
+
 
     return response.text
 
